@@ -1,0 +1,441 @@
+/**** TimeCharge.gs — 作業報告書CSV（タイムチャージ） ****/
+/* ▼ 設定（IDはあなたの環境に合わせて差し替え） */
+const TC_DB_SPREADSHEET_ID = '18kdtg4E6lHgR40tbxicd-CIFhqVWKznUbxRLNh-MaFc'; // タイムチャージDB（スプシ）
+const TC_OUTPUT_FOLDER_ID  = '132tucfV_REeFoRtX74aHJ8-Yd2PAyaZQ';            // 出力フォルダ
+
+// 入力シート名（空なら候補から自動で探す）
+const TC_SHEET_OVERRIDE = ''; // 例: 'タイムチャージ'
+const TC_SHEET_CANDIDATES = [
+  'タイムチャージ','作業報告書','作業報告書CSV','2.タイムチャージ',
+  '作業報告書CSV（入力）','TimeCharge','worklog','作業報告'
+];
+
+// プレビュー/CSVの安全弁
+const TC_PREVIEW_LIMIT = 100;   // UI表示は上位100件
+const TC_HARD_LIMIT    = 50000; // これ以上は切る（念のため）
+
+
+/* ▼ 出力ヘッダ（作業報告書CSVファイルレイアウト） */
+const TC_HEADERS = [
+  '担当者','請求種別','得意先コード','得意先','ケースコード','ケース名','単価','発生日',
+  '開始時間','終了時間','作業時間','金額（自動計算）','明細備考（内容）',
+  '請求データ作成FLG','請求データ作成日','請求データ作成者','備考（社内）'
+];
+
+/* ▼ 入力→出力のマッピング（“論理名”→シート上の候補ヘッダ群） */
+const TC_ALIASES = {
+  '日付':        ['日付（年月日）','日付(年月日)','発生日','日付','作業日'],
+  '担当者':      ['担当者','担当','担当名','ユーザー','ユーザ'],
+  '得意先コード':['得意先コード','顧客コード','取引先コード','クライアントコード','客先コード','取引先CD'],
+  '得意先':      ['得意先','顧客名','取引先','クライアント','会社名','客先','顧客'],
+
+  // 以下は“あれば使う”列（必須ではない）
+  '請求種別':    ['請求種別','種別'],
+  'ケースコード':['ケースコード','案件コード','ケースID'],
+  'ケース名':    ['ケース名（案件名）','案件名','ケース名','案件'],
+  '単価/m':      ['単価/m','単価/分','分単価','単価（分）','単価(分)','単価'],
+  '開始時間':    ['開始時間','開始','From','開始時刻'],
+  '終了時間':    ['終了時間','終了','To','終了時刻'],
+  '作業時間':    ['作業時間','作業分','作業時間（分）','作業時間(分)','時間（数量）','数量','時間'],
+  '金額':        ['金額（自動計算）','金額','金額(自動計算)'],
+  '明細備考':    ['明細備考（内容）','明細備考','内容','備考'],
+  'FLG':         ['請求データ作成FLG','作成FLG','請求FLG'],
+  '作成日':      ['請求データ作成日','作成日'],
+  '作成者':      ['請求データ作成者','作成者','担当'],
+  '社内備考':    ['備考（社内）','社内備考','備考(社内)']
+};
+
+// 必須（論理名）
+const TC_REQUIRED = ['日付','担当者','得意先コード','得意先'];
+
+
+/* ============ 公開API（UIから呼ばれる） ============ */
+
+// ヘルスチェック（ヘッダ一覧と不足論理名を返す）
+function ping_TimeCharge() {
+  const t0 = new Date();
+  const sh = tc_resolveSheet_();
+  const lr = sh.getLastRow(), lc = sh.getLastColumn();
+  const headers = sh.getRange(1,1,1,lc).getDisplayValues()[0].map(h=>String(h||''));
+  const idxMap  = tc_buildHeaderIndex_(headers);
+  const lacks   = TC_REQUIRED.filter(k => typeof idxMap[k] !== 'number');
+
+  const tz = Session.getScriptTimeZone();
+  const at = Utilities.formatDate(new Date(), tz, 'yyyy/MM/dd HH:mm:ss');
+  tc_log_('INFO','TC ping',{ lastRow:lr, lastCol:lc, heads:headers, lacks, ms:(new Date())-t0 });
+  return { ok: true, lastRow:lr, lastCol:lc, heads:headers, lacks, at, ms:(new Date())-t0 };
+}
+
+// プレビュー（対象年月 & FLG空）
+function preview_TimeCharge(params) {
+  const t0 = new Date();
+  try {
+    const ymRaw = params && (params.billingYm || params.closingDate || '');
+    const ym = tc_parseYearMonth_(ymRaw);
+    if (!ym) throw new Error('請求対象年月が未指定/不正（YYYY/MM または YYYYMM）');
+
+    const detail = tc_buildRows_(ym, { hardLimit: TC_HARD_LIMIT });
+    const tz = Session.getScriptTimeZone();
+    const at = Utilities.formatDate(new Date(), tz, 'yyyy/MM/dd HH:mm:ss');
+
+    const summary = tc_buildSummaryMessage_('プレビュー', detail);
+    tc_log_('INFO','TC preview completed', Object.assign({ ms:(new Date())-t0 }, detail));
+
+    if (!detail.rows.length) {
+      return { ok:false, message:summary, generatedAt: at };
+    }
+    const body = detail.rows.slice(0, TC_PREVIEW_LIMIT);
+    return {
+      ok:true,
+      rows: detail.picked,
+      generatedAt: at,
+      preview: [TC_HEADERS].concat(body),
+      message: summary
+    };
+  } catch (e) {
+    tc_log_('ERROR','TC preview failed',{ message:e.message, stack:e.stack });
+    return { ok:false, message:e.message };
+  }
+}
+
+// CSV作成
+function createCsv_TimeCharge(params) {
+  const t0 = new Date();
+  try {
+    if (!TC_OUTPUT_FOLDER_ID) throw new Error('TC_OUTPUT_FOLDER_ID が未設定です。');
+    const ymRaw = params && (params.billingYm || params.closingDate || '');
+    const ym = tc_parseYearMonth_(ymRaw);
+    if (!ym) throw new Error('請求対象年月が未指定/不正（YYYY/MM または YYYYMM）');
+
+    const detail = tc_buildRows_(ym, { hardLimit: TC_HARD_LIMIT });
+    const tz = Session.getScriptTimeZone();
+    const now = new Date();
+    const at  = Utilities.formatDate(now, tz, 'yyyy/MM/dd HH:mm:ss');
+
+    if (!detail.rows.length) {
+      tc_log_('INFO','TC CSV skipped(0)', Object.assign({ ms:(new Date())-t0 }, detail));
+      return { ok:false, message: tc_buildSummaryMessage_('抽出', detail) };
+    }
+
+    const csv = tc_toCsv_([TC_HEADERS].concat(detail.rows));
+    const filename = 'TimeCharge_' + Utilities.formatDate(now, tz, 'yyyyMMdd_HHmmss') + '.csv';
+    const file = DriveApp.getFolderById(TC_OUTPUT_FOLDER_ID).createFile(filename, csv, MimeType.CSV);
+
+    tc_log_('INFO','TC CSV created', Object.assign({ fileId:file.getId(), ms:(new Date())-t0 }, detail));
+
+    return { ok:true, url:file.getUrl(), fileId:file.getId(), filename,
+      rows: detail.picked, completedAt: at,
+      message: tc_buildSummaryMessage_('CSV作成完了', detail)
+    };
+  } catch (e) {
+    tc_log_('ERROR','TC CSV failed',{ message:e.message, stack:e.stack });
+    return { ok:false, message:e.message };
+  }
+}
+
+
+/* ============ 本体（抽出） ============ */
+function tc_buildRows_(targetYm, opts){
+  const year = targetYm && Number(targetYm.year);
+  const month = targetYm && Number(targetYm.month);
+  const hardLimit  = opts && Number(opts.hardLimit) ? Number(opts.hardLimit) : TC_HARD_LIMIT;
+
+  const sh = tc_resolveSheet_();
+  const values = sh.getDataRange().getDisplayValues();
+  const totalRows = Math.max(values.length - 1, 0);
+  if (values.length < 2) {
+    return { rows:[], year, month, totalRows, scanned:0, picked:0, skippedFlag:0, skippedBadDate:0, skippedYmMismatch:0 };
+  }
+
+  const headers = values[0].map(h => String(h || '').trim());
+  const idxMap  = tc_buildHeaderIndex_(headers);
+  if (!tc_hasAllRequired_(idxMap)) {
+    return { rows:[], year, month, totalRows, scanned:0, picked:0, skippedFlag:0, skippedBadDate:0, skippedYmMismatch:0 };
+  }
+
+  const idxByName = (nameList)=> {
+    for (const name of nameList) {
+      const norm = tc_normHeader_(name);
+      const pos  = headers.findIndex(h => tc_normHeader_(h) === norm);
+      if (pos >= 0) return pos;
+    }
+    return -1;
+  };
+  const idxOptional = {
+    請求種別      : idxByName(TC_ALIASES['請求種別']    || []),
+    ケースコード  : idxByName(TC_ALIASES['ケースコード']|| []),
+    ケース名      : idxByName(TC_ALIASES['ケース名']    || []),
+    単価m         : idxByName(TC_ALIASES['単価/m']      || []),
+    開始時間      : idxByName(TC_ALIASES['開始時間']    || []),
+    終了時間      : idxByName(TC_ALIASES['終了時間']    || []),
+    作業時間      : idxByName(TC_ALIASES['作業時間']    || []),
+    金額          : idxByName(TC_ALIASES['金額']        || []),
+    明細備考      : idxByName(TC_ALIASES['明細備考']    || []),
+    FLG           : idxByName(TC_ALIASES['FLG']         || []),
+    作成日        : idxByName(TC_ALIASES['作成日']      || []),
+    作成者        : idxByName(TC_ALIASES['作成者']      || []),
+    社内備考      : idxByName(TC_ALIASES['社内備考']    || []),
+  };
+
+  let scanned=0, picked=0, skippedFlag=0, skippedBadDate=0, skippedYmMismatch=0;
+  const out = [];
+
+  for (let r=1; r<values.length; r++){
+    if (out.length >= hardLimit) break;
+    scanned++;
+    const row = values[r];
+
+    const rawDate = tc_vBy_(row, idxMap, '日付');
+    const ymFromCell = tc_extractYearMonth_(rawDate);
+    if (!ymFromCell) { skippedBadDate++; continue; }
+    const rowYear = Number(ymFromCell.year);
+    const rowMonth = Number(ymFromCell.month);
+    if (rowYear !== year || rowMonth !== month) { skippedYmMismatch++; continue; }
+
+    if (idxOptional.FLG >= 0) {
+      const flg = String(row[idxOptional.FLG] || '').trim();
+      if (flg) { skippedFlag++; continue; }
+    }
+
+    const vOpt = (i)=> i>=0 ? (row[i] ?? '') : '';
+    const tcRow = [
+      tc_vBy_(row, idxMap, '担当者'),
+      vOpt(idxOptional.請求種別),
+      tc_vBy_(row, idxMap, '得意先コード'),
+      tc_vBy_(row, idxMap, '得意先'),
+      vOpt(idxOptional.ケースコード),
+      vOpt(idxOptional.ケース名),
+      vOpt(idxOptional.単価m),
+      tc_vBy_(row, idxMap, '日付'),
+      vOpt(idxOptional.開始時間),
+      vOpt(idxOptional.終了時間),
+      vOpt(idxOptional.作業時間),
+      vOpt(idxOptional.金額),
+      vOpt(idxOptional.明細備考),
+      vOpt(idxOptional.FLG),
+      vOpt(idxOptional.作成日),
+      vOpt(idxOptional.作成者),
+      vOpt(idxOptional.社内備考),
+    ];
+    out.push(tcRow);
+  }
+
+  picked = out.length;
+
+  const col = (h)=> TC_HEADERS.indexOf(h);
+  out.sort((a,b)=>{
+    const aY = (a[col('発生日')] || '').replace(/\D/g,'');
+    const bY = (b[col('発生日')] || '').replace(/\D/g,'');
+    if (aY !== bY) return aY < bY ? -1 : 1;
+    const aC = a[col('得意先コード')] || '';
+    const bC = b[col('得意先コード')] || '';
+    if (aC !== bC) return aC < bC ? -1 : 1;
+    const aS = a[col('開始時間')] || '';
+    const bS = b[col('開始時間')] || '';
+    return aS < bS ? -1 : (aS > bS ? 1 : 0);
+  });
+
+  tc_log_('DEBUG','TC build stats (target YM)',{
+    year, month, totalRows, scanned, picked, skippedFlag, skippedBadDate, skippedYmMismatch
+  });
+
+  return { rows: out, year, month, totalRows, scanned, picked, skippedFlag, skippedBadDate, skippedYmMismatch };
+}
+
+
+/* ============ ヘッダ解決ユーティリティ ============ */
+function tc_normHeader_(s){
+  return String(s||'')
+    .trim()
+    .replace(/\s+/g,'')
+    .replace(/[()]/g, m => m==='(' ? '（' : '）');
+}
+
+function tc_buildHeaderIndex_(headers){
+  const idxByNorm = {};
+  headers.forEach((h,i)=> idxByNorm[tc_normHeader_(h)] = i);
+
+  const map = {};
+  for (const logic of Object.keys(TC_ALIASES)){
+    const cands = (TC_ALIASES[logic] || []).map(tc_normHeader_);
+    for (const cand of cands){
+      if (cand in idxByNorm){ map[logic] = idxByNorm[cand]; break; }
+    }
+  }
+  return map; // {論理名: index}
+}
+
+function tc_hasAllRequired_(idxMap){
+  return TC_REQUIRED.every(k => typeof idxMap[k] === 'number');
+}
+
+function tc_vBy_(row, idxMap, logicKey){
+  const i = idxMap[logicKey];
+  return (typeof i === 'number') ? (row[i] ?? '') : '';
+}
+
+
+/* ============ シート解決 ============ */
+function tc_resolveSheet_(){
+  if (!TC_DB_SPREADSHEET_ID) throw new Error('TC_DB_SPREADSHEET_ID が未設定です。');
+  const ss = SpreadsheetApp.openById(TC_DB_SPREADSHEET_ID);
+
+  if (TC_SHEET_OVERRIDE) {
+    const sh = ss.getSheetByName(TC_SHEET_OVERRIDE);
+    if (sh) return sh;
+    const list = ss.getSheets().map(s=>s.getName());
+    throw new Error('指定シートが見つかりません: ' + TC_SHEET_OVERRIDE + ' / 存在: ' + JSON.stringify(list));
+  }
+  for (const name of TC_SHEET_CANDIDATES) {
+    const sh = ss.getSheetByName(name);
+    if (sh) return sh;
+  }
+  const list = ss.getSheets().map(s=>s.getName());
+  throw new Error('タイムチャージ入力シートが見つかりません（候補: ' + TC_SHEET_CANDIDATES.join(', ') + '）/ 存在: ' + JSON.stringify(list));
+}
+
+
+/* ============ 日付/共通ユーティリティ ============ */
+function tc_parseDateStrict_(v){
+  if (v == null || v === '') return null;
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    const d = v;
+    return isNaN(d.getTime()) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+
+  const raw = String(v).trim();
+  if (!raw) return null;
+
+  const normalized = raw
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[年月]/g, '/')
+    .replace(/日/g, '')
+    .replace(/[.\-]/g, '/')
+    .trim();
+
+  const match = normalized.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if (match) {
+    const [_, y, m, d] = match;
+    const dt = new Date(Number(y), Number(m) - 1, Number(d));
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+
+  const digits = normalized.replace(/\D/g,'');
+  if (digits.length >= 8) {
+    const y = Number(digits.slice(0,4));
+    const m = Number(digits.slice(4,6)) - 1;
+    const d = Number(digits.slice(6,8));
+    const dt = new Date(y, m, d);
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+
+  const fallback = new Date(normalized);
+  return isNaN(fallback.getTime()) ? null : new Date(fallback.getFullYear(), fallback.getMonth(), fallback.getDate());
+}
+
+function tc_extractYearMonth_(value){
+  if (value == null || value === '') return null;
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    const d = value;
+    if (isNaN(d.getTime())) return null;
+    return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const normalized = raw
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[年月]/g, '/')
+    .replace(/日/g, '')
+    .replace(/[.\-]/g, '/')
+    .trim();
+
+  const full = normalized.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if (full) {
+    const year = Number(full[1]);
+    const month = Number(full[2]);
+    if (month >= 1 && month <= 12) return { year, month };
+    return null;
+  }
+
+  const ym = normalized.match(/^(\d{4})\/(\d{1,2})$/);
+  if (ym) {
+    const year = Number(ym[1]);
+    const month = Number(ym[2]);
+    if (month >= 1 && month <= 12) return { year, month };
+    return null;
+  }
+
+  const digits = normalized.replace(/\D/g, '');
+  if (digits.length >= 6) {
+    const year = Number(digits.slice(0, 4));
+    const month = Number(digits.slice(4, 6));
+    if (month >= 1 && month <= 12) return { year, month };
+  }
+
+  return null;
+}
+
+function tc_parseYearMonth_(value){
+  if (value == null || value === '') return null;
+  if (value instanceof Date) {
+    return { year: value.getFullYear(), month: value.getMonth() + 1 };
+  }
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const normalized = raw
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[年月]/g, '/')
+    .replace(/日/g, '')
+    .replace(/[.]/g, '/')
+    .replace(/-/g, '/')
+    .trim();
+
+  const ymSlash = normalized.match(/^(\d{4})\/(\d{1,2})$/);
+  if (ymSlash) {
+    const year = Number(ymSlash[1]);
+    const month = Number(ymSlash[2]);
+    if (month >= 1 && month <= 12) return { year, month };
+    return null;
+  }
+
+  const digits = normalized.replace(/\D/g,'');
+  if (digits.length === 6) {
+    const year = Number(digits.slice(0,4));
+    const month = Number(digits.slice(4,6));
+    if (month >=1 && month <=12) return { year, month };
+  }
+
+  return null;
+}
+
+function tc_fmtYearMonth_(year, month){
+  if (!year || !month) return '';
+  return year + '/' + String(month).padStart(2, '0');
+}
+
+function tc_toCsv_(rows2d){
+  return rows2d.map(r=> r.map(x=>{
+    const s = (x==null)?'':String(x);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+  }).join(',')).join('\n');
+}
+
+function tc_buildSummaryMessage_(label, detail){
+  const ymText = tc_fmtYearMonth_(detail.year, detail.month) || '-';
+  const total = typeof detail.totalRows === 'number' ? detail.totalRows : detail.scanned;
+  const picked = typeof detail.picked === 'number' ? detail.picked : (detail.rows ? detail.rows.length : 0);
+  const mismatch = detail.skippedYmMismatch || 0;
+  return `[TC] ${label}: ${picked}件（対象年月: ${ymText} / 総行数: ${total} / 採用: ${picked} / FLGありスキップ: ${detail.skippedFlag || 0} / 発生日不正: ${detail.skippedBadDate || 0} / 月一致せず: ${mismatch}）`;
+}
+
+function tc_log_(level, message, data){
+  const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
+  try { Logger.log('%s [%s] %s %s', ts, level, message, data ? JSON.stringify(data) : ''); } catch(_){}}
+
+/* ============ デバッグ用（任意） ============ */
+function dev_ping_TC(){ Logger.log(JSON.stringify(ping_TimeCharge())); }
+function dev_preview_TC(){ Logger.log(JSON.stringify(preview_TimeCharge({ billingYm:'2025/07' }))); }
+function dev_csv_TC(){ Logger.log(JSON.stringify(createCsv_TimeCharge({ billingYm:'2025/07' }))); }
