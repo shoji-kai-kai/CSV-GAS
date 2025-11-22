@@ -33,6 +33,12 @@ function rebuild_TimeChargeSummaryForMonth(billingYm) {
   const ym = tc_parseYearMonth_(billingYm);
   if (!ym) throw new Error('請求対象年月が未指定/不正（YYYY/MM または YYYYMM）');
 
+  // ★修正: 実行時の代表タイムスタンプ/作成者を保持
+  const tz = Session.getScriptTimeZone();
+  const now = new Date();
+  const stamp = Utilities.formatDate(now, tz, 'yyyyMMddHHmmss');
+  const userEmail = Session.getActiveUser().getEmail() || '';
+
   const sh = tc_resolveSheet_();
   const values = sh.getDataRange().getDisplayValues();
   const headers = values.length ? values[0].map(h => String(h || '').trim()) : [];
@@ -75,9 +81,6 @@ function rebuild_TimeChargeSummaryForMonth(billingYm) {
     const unit     = tc_toNumber_(idxOpt.単価m >=0 ? row[idxOpt.単価m] : 0);
     const cover    = tc_toNumber_(idxOpt.カバー時間 >=0 ? row[idxOpt.カバー時間] : 0);
     const workMin  = tc_toNumber_(idxOpt.作業時間 >=0 ? row[idxOpt.作業時間] : 0);
-    const flg      = idxOpt.FLG >=0 ? String(row[idxOpt.FLG] || '').trim() : ''; // ★修正: 代表FLGを保持
-    const createdAt= idxOpt.作成日 >=0 ? String(row[idxOpt.作成日] || '').trim() : ''; // ★修正: 代表作成日を保持
-    const createdBy= idxOpt.作成者 >=0 ? String(row[idxOpt.作成者] || '').trim() : ''; // ★修正: 代表作成者を保持
     const note     = idxOpt.社内備考 >=0 ? String(row[idxOpt.社内備考] || '').trim() : ''; // ★修正: 代表備考を保持
 
     // ★修正: グルーピングキーから担当者を外し、ケースコード単位で集計
@@ -86,15 +89,15 @@ function rebuild_TimeChargeSummaryForMonth(billingYm) {
       // ★修正: 代表値として最初の非空を保持
       groups.set(key, {
         person, billType, custCode, custName, caseCode, caseName, unit, cover, work:0,
-        flag: flg || '', createdAt: createdAt || '', createdBy: createdBy || '', internalNote: note || ''
+        flag: '1',               // ★修正: FLGは固定値'1'
+        createdAt: stamp,        // ★修正: 実行タイムスタンプ
+        createdBy: userEmail,    // ★修正: 実行ユーザー
+        internalNote: note || '' // ★修正: 備考（社内）の代表値
       });
     }
     const g = groups.get(key);
     g.work += workMin;
-    if (!g.flag && flg) g.flag = flg;             // ★修正: 非空の値を優先採用
-    if (!g.createdAt && createdAt) g.createdAt = createdAt; // ★修正
-    if (!g.createdBy && createdBy) g.createdBy = createdBy; // ★修正
-    if (!g.internalNote && note) g.internalNote = note;     // ★修正
+    if (!g.internalNote && note) g.internalNote = note;     // ★修正: 備考の代表値を保持
     picked++;
   }
 
