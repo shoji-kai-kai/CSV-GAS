@@ -27,7 +27,7 @@ const TC_ALIASES = {
   '日付':        ['日付（年月日）','日付(年月日)','発生日','日付','作業日'],
   '担当者':      ['担当者','担当','担当名','ユーザー','ユーザ'],
   '得意先コード':['得意先コード','顧客コード','取引先コード','クライアントコード','客先コード','取引先CD'],
-  '得意先':      ['得意先','顧客名','取引先','クライアント','会社名','客先','顧客'],
+  '得意先':      ['得意先','得意先名','顧客名','取引先','クライアント','会社名','客先','顧客'], // ★修正: 実シートの「得意先名」に対応
 
   // 以下は“あれば使う”列（必須ではない）
   '請求種別':    ['請求種別','種別'],
@@ -149,8 +149,10 @@ function tc_buildRows_(targetYm, opts){
 
   const headers = values[0].map(h => String(h || '').trim());
   const idxMap  = tc_buildHeaderIndex_(headers);
-  if (!tc_hasAllRequired_(idxMap)) {
-    return { rows:[], year, month, totalRows, scanned:0, picked:0, skippedFlag:0, skippedBadDate:0, skippedYmMismatch:0 };
+  const missingRequired = TC_REQUIRED.filter(k => typeof idxMap[k] !== 'number'); // ★修正: 不足必須列を控える
+  if (missingRequired.length) {
+    tc_log_('WARN', 'TC required columns missing', { missingRequired, headers }); // ★修正: ログに不足情報を残す
+    return { rows:[], year, month, totalRows, scanned:0, picked:0, skippedFlag:0, skippedBadDate:0, skippedYmMismatch:0, missingRequired };
   }
 
   const idxByName = (nameList)=> {
@@ -239,7 +241,7 @@ function tc_buildRows_(targetYm, opts){
     year, month, totalRows, scanned, picked, skippedFlag, skippedBadDate, skippedYmMismatch
   });
 
-  return { rows: out, year, month, totalRows, scanned, picked, skippedFlag, skippedBadDate, skippedYmMismatch };
+  return { rows: out, year, month, totalRows, scanned, picked, skippedFlag, skippedBadDate, skippedYmMismatch, missingRequired: [] };
 }
 
 
@@ -428,7 +430,10 @@ function tc_buildSummaryMessage_(label, detail){
   const total = typeof detail.totalRows === 'number' ? detail.totalRows : detail.scanned;
   const picked = typeof detail.picked === 'number' ? detail.picked : (detail.rows ? detail.rows.length : 0);
   const mismatch = detail.skippedYmMismatch || 0;
-  return `[TC] ${label}: ${picked}件（対象年月: ${ymText} / 総行数: ${total} / 採用: ${picked} / FLGありスキップ: ${detail.skippedFlag || 0} / 発生日不正: ${detail.skippedBadDate || 0} / 月一致せず: ${mismatch}）`;
+  const lacks = (detail.missingRequired && detail.missingRequired.length)
+    ? ` / 必須列不足: ${detail.missingRequired.join(', ')}`
+    : '';
+  return `[TC] ${label}: ${picked}件（対象年月: ${ymText} / 総行数: ${total} / 採用: ${picked} / FLGありスキップ: ${detail.skippedFlag || 0} / 発生日不正: ${detail.skippedBadDate || 0} / 月一致せず: ${mismatch}${lacks}）`;
 }
 
 function tc_log_(level, message, data){
