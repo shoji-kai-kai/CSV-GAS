@@ -71,7 +71,7 @@ function preview_TimeCharge(params) {
   const t0 = new Date();
   try {
     const ymRaw = params && (params.billingYm || params.closingDate || '');
-    const ym = tc_parseYearMonth_(ymRaw);
+    const ym = tc_parseYearMonth_(ymRaw); // ★修正: UIから渡された年月を厳密にパース
     if (!ym) throw new Error('請求対象年月が未指定/不正（YYYY/MM または YYYYMM）');
 
     const detail = tc_buildRows_(ym, { hardLimit: TC_HARD_LIMIT });
@@ -104,7 +104,7 @@ function createCsv_TimeCharge(params) {
   try {
     if (!TC_OUTPUT_FOLDER_ID) throw new Error('TC_OUTPUT_FOLDER_ID が未設定です。');
     const ymRaw = params && (params.billingYm || params.closingDate || '');
-    const ym = tc_parseYearMonth_(ymRaw);
+    const ym = tc_parseYearMonth_(ymRaw); // ★修正: UIから渡された年月を厳密にパース
     if (!ym) throw new Error('請求対象年月が未指定/不正（YYYY/MM または YYYYMM）');
 
     const detail = tc_buildRows_(ym, { hardLimit: TC_HARD_LIMIT });
@@ -124,7 +124,7 @@ function createCsv_TimeCharge(params) {
     tc_log_('INFO','TC CSV created', Object.assign({ fileId:file.getId(), ms:(new Date())-t0 }, detail));
 
     return { ok:true, url:file.getUrl(), fileId:file.getId(), filename,
-      rows: detail.picked, completedAt: at,
+      rows:detail.picked, completedAt: at,
       message: tc_buildSummaryMessage_('CSV作成完了', detail)
     };
   } catch (e) {
@@ -136,63 +136,47 @@ function createCsv_TimeCharge(params) {
 
 /* ============ 本体（抽出） ============ */
 function tc_buildRows_(targetYm, opts){
-  const year = targetYm && Number(targetYm.year);
-  const month = targetYm && Number(targetYm.month);
-  const hardLimit  = opts && Number(opts.hardLimit) ? Number(opts.hardLimit) : TC_HARD_LIMIT;
+  const hardLimit  = tc_numOrDefault_(opts && opts.hardLimit, TC_HARD_LIMIT);
 
   const sh = tc_resolveSheet_();
   const values = sh.getDataRange().getDisplayValues();
-  const totalRows = Math.max(values.length - 1, 0);
   if (values.length < 2) {
-    return { rows:[], year, month, totalRows, scanned:0, picked:0, skippedFlag:0, skippedBadDate:0, skippedYmMismatch:0 };
+    return {
+      rows:[], year:targetYm.year, month:targetYm.month,
+      scanned:0, totalRows:0, picked:0,
+      skippedFlag:0, skippedBadDate:0, skippedYmMismatch:0,
+      missingRequired: []
+    };
   }
 
   const headers = values[0].map(h => String(h || '').trim());
   const idxMap  = tc_buildHeaderIndex_(headers);
-  const missingRequired = TC_REQUIRED.filter(k => typeof idxMap[k] !== 'number'); // ★修正: 不足必須列を控える
+  const missingRequired = TC_REQUIRED.filter(k => typeof idxMap[k] !== 'number');
   if (missingRequired.length) {
-    tc_log_('WARN', 'TC required columns missing', { missingRequired, headers }); // ★修正: ログに不足情報を残す
-    return { rows:[], year, month, totalRows, scanned:0, picked:0, skippedFlag:0, skippedBadDate:0, skippedYmMismatch:0, missingRequired };
+    tc_log_('WARN','TC build aborted: missing required columns',{ missingRequired, headers }); // ★修正: 必須列不足をログ出力
+    return {
+      rows:[], year:targetYm.year, month:targetYm.month,
+      scanned:0, totalRows:values.length-1, picked:0,
+      skippedFlag:0, skippedBadDate:0, skippedYmMismatch:0,
+      missingRequired
+    };
   }
 
-  const idxByName = (nameList)=> {
-    for (const name of nameList) {
-      const norm = tc_normHeader_(name);
-      const pos  = headers.findIndex(h => tc_normHeader_(h) === norm);
-      if (pos >= 0) return pos;
-    }
-    return -1;
-  };
-  const idxOptional = {
-    請求種別      : idxByName(TC_ALIASES['請求種別']    || []),
-    ケースコード  : idxByName(TC_ALIASES['ケースコード']|| []),
-    ケース名      : idxByName(TC_ALIASES['ケース名']    || []),
-    単価m         : idxByName(TC_ALIASES['単価/m']      || []),
-    開始時間      : idxByName(TC_ALIASES['開始時間']    || []),
-    終了時間      : idxByName(TC_ALIASES['終了時間']    || []),
-    作業時間      : idxByName(TC_ALIASES['作業時間']    || []),
-    金額          : idxByName(TC_ALIASES['金額']        || []),
-    明細備考      : idxByName(TC_ALIASES['明細備考']    || []),
-    FLG           : idxByName(TC_ALIASES['FLG']         || []),
-    作成日        : idxByName(TC_ALIASES['作成日']      || []),
-    作成者        : idxByName(TC_ALIASES['作成者']      || []),
-    社内備考      : idxByName(TC_ALIASES['社内備考']    || []),
-  };
+  const idxOptional = tc_buildOptionalIndex_(headers);
 
   let scanned=0, picked=0, skippedFlag=0, skippedBadDate=0, skippedYmMismatch=0;
   const out = [];
+  const totalRows = values.length - 1;
 
   for (let r=1; r<values.length; r++){
     if (out.length >= hardLimit) break;
     scanned++;
-    const row = values[r];
 
-    const rawDate = tc_vBy_(row, idxMap, '日付');
-    const ymFromCell = tc_extractYearMonth_(rawDate);
-    if (!ymFromCell) { skippedBadDate++; continue; }
-    const rowYear = Number(ymFromCell.year);
-    const rowMonth = Number(ymFromCell.month);
-    if (rowYear !== year || rowMonth !== month) { skippedYmMismatch++; continue; }
+    const row = values[r];
+    const dateCell = tc_vBy_(row, idxMap, '日付');
+    const ymd = tc_extractYearMonth_(dateCell); // ★修正: 発生日から年月を抽出
+    if (!ymd) { skippedBadDate++; continue; }
+    if (ymd.year !== targetYm.year || ymd.month !== targetYm.month) { skippedYmMismatch++; continue; }
 
     if (idxOptional.FLG >= 0) {
       const flg = String(row[idxOptional.FLG] || '').trim();
@@ -217,12 +201,11 @@ function tc_buildRows_(targetYm, opts){
       vOpt(idxOptional.FLG),
       vOpt(idxOptional.作成日),
       vOpt(idxOptional.作成者),
-      vOpt(idxOptional.社内備考),
+      vOpt(idxOptional.社内備考)
     ];
     out.push(tcRow);
+    picked++;
   }
-
-  picked = out.length;
 
   const col = (h)=> TC_HEADERS.indexOf(h);
   out.sort((a,b)=>{
@@ -237,11 +220,46 @@ function tc_buildRows_(targetYm, opts){
     return aS < bS ? -1 : (aS > bS ? 1 : 0);
   });
 
-  tc_log_('DEBUG','TC build stats (target YM)',{
-    year, month, totalRows, scanned, picked, skippedFlag, skippedBadDate, skippedYmMismatch
-  });
+  tc_log_('DEBUG','TC build stats',{ scanned, picked, skippedFlag, skippedBadDate, skippedYmMismatch, hardLimit, targetYm });
 
-  return { rows: out, year, month, totalRows, scanned, picked, skippedFlag, skippedBadDate, skippedYmMismatch, missingRequired: [] };
+  return {
+    rows: out,
+    year: targetYm.year,
+    month: targetYm.month,
+    scanned,
+    totalRows,
+    picked,
+    skippedFlag,
+    skippedBadDate,
+    skippedYmMismatch,
+    missingRequired: []
+  };
+}
+
+function tc_buildOptionalIndex_(headers){
+  const idxByName = (nameList)=> {
+    for (const name of nameList) {
+      const norm = tc_normHeader_(name);
+      const pos  = headers.findIndex(h => tc_normHeader_(h) === norm);
+      if (pos >= 0) return pos;
+    }
+    return -1;
+  };
+  return {
+    請求種別      : idxByName(TC_ALIASES['請求種別']    || []),
+    ケースコード  : idxByName(TC_ALIASES['ケースコード']|| []),
+    ケース名      : idxByName(TC_ALIASES['ケース名']    || []),
+    単価m         : idxByName(TC_ALIASES['単価/m']      || []),
+    開始時間      : idxByName(TC_ALIASES['開始時間']    || []),
+    終了時間      : idxByName(TC_ALIASES['終了時間']    || []),
+    作業時間      : idxByName(TC_ALIASES['作業時間']    || []),
+    金額          : idxByName(TC_ALIASES['金額']        || []),
+    明細備考      : idxByName(TC_ALIASES['明細備考']    || []),
+    FLG           : idxByName(TC_ALIASES['FLG']         || []),
+    作成日        : idxByName(TC_ALIASES['作成日']      || []),
+    作成者        : idxByName(TC_ALIASES['作成者']      || []),
+    社内備考      : idxByName(TC_ALIASES['社内備考']    || []),
+  };
 }
 
 
@@ -298,41 +316,46 @@ function tc_resolveSheet_(){
 
 
 /* ============ 日付/共通ユーティリティ ============ */
-function tc_parseDateStrict_(v){
-  if (v == null || v === '') return null;
-  if (Object.prototype.toString.call(v) === '[object Date]') {
-    const d = v;
-    return isNaN(d.getTime()) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+function tc_parseYearMonth_(value){
+  if (value == null || value === '') return null;
+  if (value instanceof Date) {
+    return { year: value.getFullYear(), month: value.getMonth() + 1 };
   }
-
-  const raw = String(v).trim();
+  const raw = String(value).trim();
   if (!raw) return null;
 
   const normalized = raw
     .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/[年月]/g, '/')
     .replace(/日/g, '')
-    .replace(/[.\-]/g, '/')
+    .replace(/[.]/g, '/')
+    .replace(/-/g, '/')
     .trim();
 
-  const match = normalized.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
-  if (match) {
-    const [_, y, m, d] = match;
-    const dt = new Date(Number(y), Number(m) - 1, Number(d));
-    return isNaN(dt.getTime()) ? null : dt;
+  const full = normalized.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if (full) {
+    const year = Number(full[1]);
+    const month = Number(full[2]);
+    if (month >= 1 && month <= 12) return { year, month };
+    return null;
+  }
+
+  const ymSlash = normalized.match(/^(\d{4})\/(\d{1,2})$/);
+  if (ymSlash) {
+    const year = Number(ymSlash[1]);
+    const month = Number(ymSlash[2]);
+    if (month >= 1 && month <= 12) return { year, month };
+    return null;
   }
 
   const digits = normalized.replace(/\D/g,'');
-  if (digits.length >= 8) {
-    const y = Number(digits.slice(0,4));
-    const m = Number(digits.slice(4,6)) - 1;
-    const d = Number(digits.slice(6,8));
-    const dt = new Date(y, m, d);
-    return isNaN(dt.getTime()) ? null : dt;
+  if (digits.length >= 6) {
+    const year = Number(digits.slice(0,4));
+    const month = Number(digits.slice(4,6));
+    if (month >=1 && month <=12) return { year, month };
   }
 
-  const fallback = new Date(normalized);
-  return isNaN(fallback.getTime()) ? null : new Date(fallback.getFullYear(), fallback.getMonth(), fallback.getDate());
+  return null;
 }
 
 function tc_extractYearMonth_(value){
@@ -371,43 +394,9 @@ function tc_extractYearMonth_(value){
 
   const digits = normalized.replace(/\D/g, '');
   if (digits.length >= 6) {
-    const year = Number(digits.slice(0, 4));
-    const month = Number(digits.slice(4, 6));
-    if (month >= 1 && month <= 12) return { year, month };
-  }
-
-  return null;
-}
-
-function tc_parseYearMonth_(value){
-  if (value == null || value === '') return null;
-  if (value instanceof Date) {
-    return { year: value.getFullYear(), month: value.getMonth() + 1 };
-  }
-  const raw = String(value).trim();
-  if (!raw) return null;
-
-  const normalized = raw
-    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-    .replace(/[年月]/g, '/')
-    .replace(/日/g, '')
-    .replace(/[.]/g, '/')
-    .replace(/-/g, '/')
-    .trim();
-
-  const ymSlash = normalized.match(/^(\d{4})\/(\d{1,2})$/);
-  if (ymSlash) {
-    const year = Number(ymSlash[1]);
-    const month = Number(ymSlash[2]);
-    if (month >= 1 && month <= 12) return { year, month };
-    return null;
-  }
-
-  const digits = normalized.replace(/\D/g,'');
-  if (digits.length === 6) {
     const year = Number(digits.slice(0,4));
     const month = Number(digits.slice(4,6));
-    if (month >=1 && month <=12) return { year, month };
+    if (month >= 1 && month <= 12) return { year, month };
   }
 
   return null;
@@ -416,6 +405,11 @@ function tc_parseYearMonth_(value){
 function tc_fmtYearMonth_(year, month){
   if (!year || !month) return '';
   return year + '/' + String(month).padStart(2, '0');
+}
+
+function tc_numOrDefault_(value, fallback){
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function tc_toCsv_(rows2d){
