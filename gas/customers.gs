@@ -90,6 +90,65 @@ function createCsv_CustomersByClosing(params){
       return { ok:false, message:`[請求書] 抽出 0件（${at}）` };
     }
 
+    // ★修正: タイムチャージ月次集計を取り込み、請求書行にマージ
+    const billingYm = deriveBillingYmFromClosing_(closing);
+    let summaryRows = [];
+    try {
+      summaryRows = loadTimeChargeSummaryRows_(billingYm);
+    } catch(e) {
+      logC_('ERROR','merge timecharge summary failed',{ msg:e.message, stack:e.stack });
+      return { ok:false, message:`[請求書] CSV作成失敗: タイムチャージ集計データ結合でエラー: ${e.message}` };
+    }
+
+    if (summaryRows.length) {
+      const idxCode = INVOICE_HEADERS.indexOf('得意先コード');
+      const idxName = INVOICE_HEADERS.indexOf('得意先名（正式名称）');
+      const idxContract = INVOICE_HEADERS.indexOf('契約種別');
+      const idxItem = INVOICE_HEADERS.indexOf('請求項目（概要）');
+      const idxMonthly = INVOICE_HEADERS.indexOf('顧問料/月');
+      const idxQty = INVOICE_HEADERS.indexOf('数量');
+      const idxInternal = INVOICE_HEADERS.indexOf('備考（社内）');
+      const idxClosing = INVOICE_HEADERS.indexOf('請求締日');
+      const idxIssue = INVOICE_HEADERS.indexOf('発行日');
+      const idxDue = INVOICE_HEADERS.indexOf('支払期限');
+
+      const issue = today_();
+      const due = endOfMonth_(issue);
+      const issueStr = fmtYmd_(issue);
+      const dueStr = fmtYmd_(due);
+      const closingStr = fmtYmd_(closing);
+
+      const baseByCustCode = new Map();
+      for (const row of rows) {
+        const code = String(row[idxCode] || '').trim();
+        if (code && !baseByCustCode.has(code)) {
+          baseByCustCode.set(code, row);
+        }
+      }
+
+      summaryRows.forEach(row => {
+        const base = baseByCustCode.get(String(row.custCode || '').trim());
+        const newRow = base ? base.slice() : new Array(INVOICE_HEADERS.length).fill('');
+
+        if (!base) {
+          if (idxCode >= 0) newRow[idxCode] = row.custCode || '';
+          if (idxName >= 0) newRow[idxName] = row.custName || '';
+          if (idxClosing >= 0) newRow[idxClosing] = closingStr;
+          if (idxIssue >= 0) newRow[idxIssue] = issueStr;
+          if (idxDue >= 0) newRow[idxDue] = dueStr;
+        }
+
+        const itemParts = [row.billType, row.caseCode, row.caseName].filter(v=>String(v||'').trim());
+        if (idxContract >= 0) newRow[idxContract] = row.billType || '';
+        if (idxItem >= 0) newRow[idxItem] = itemParts.join(' ');
+        if (idxMonthly >= 0) newRow[idxMonthly] = row.unitPerMin;
+        if (idxQty >= 0) newRow[idxQty] = row.overMinutes;
+        if (idxInternal >= 0) newRow[idxInternal] = row.internalNote || newRow[idxInternal];
+
+        rows.push(newRow);
+      });
+    }
+
     const csv  = toCsv_([INVOICE_HEADERS].concat(rows));
     const tz   = Session.getScriptTimeZone();
     const now  = new Date();
@@ -343,3 +402,73 @@ function nowStamp_(){
 function logC_(level, msg, data){
   const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
   try{ Logger.log('%s [%s] %s %s', ts, level, msg, data?JSON.stringify(data):''); }catch(_){}}
+
+// ★修正: 締日から請求対象年月(YYYY/MM)を導出
+function deriveBillingYmFromClosing_(closing){
+  if (!closing || Object.prototype.toString.call(closing) !== '[object Date]') return '';
+  const y = closing.getFullYear();
+  const m = closing.getMonth() + 1;
+  return y + '/' + String(m).padStart(2,'0');
+}
+
+// ★修正: タイムチャージ月次集計（Summaryシート）を読み込む
+function loadTimeChargeSummaryRows_(billingYm){
+  if (!billingYm) return [];
+  const filename = 'TimeCharge_Summary_' + String(billingYm).replace(/\//g, '-');
+  try {
+    const folder = DriveApp.getFolderById(TC_SUMMARY_FOLDER_ID);
+    const it = folder.getFilesByName(filename);
+    if (!it.hasNext()) return [];
+    const file = it.next();
+    const ss = SpreadsheetApp.openById(file.getId());
+    const sh = ss.getSheetByName('Summary');
+    if (!sh) return [];
+
+    const values = sh.getDataRange().getDisplayValues();
+    if (values.length < 2) return [];
+    const headers = values[0].map(h=>String(h||'').trim());
+
+    const required = [
+      '担当者','請求種別','得意先コード','得意先名','ケースコード','ケース名','単価','カバー時間',
+      '合計作業時間','超過時間','請求金額','請求データ作成FLG','請求データ作成日','請求データ作成者','備考（社内）'
+    ];
+    const idx = {};
+    for (const name of required) {
+      const pos = headers.indexOf(name);
+      if (pos < 0) throw new Error('Summaryシートのヘッダ不足: ' + name);
+      idx[name] = pos;
+    }
+
+    const toNum = (v)=>{
+      const n = Number(String(v||'').replace(/,/g,''));
+      return isNaN(n) ? 0 : n;
+    };
+
+    const out = [];
+    for (let r=1; r<values.length; r++){
+      const row = values[r];
+      out.push({
+        person: row[idx['担当者']] || '',
+        billType: row[idx['請求種別']] || '',
+        custCode: row[idx['得意先コード']] || '',
+        custName: row[idx['得意先名']] || '',
+        caseCode: row[idx['ケースコード']] || '',
+        caseName: row[idx['ケース名']] || '',
+        unitPerMin: toNum(row[idx['単価']]),
+        coverMinutes: toNum(row[idx['カバー時間']]),
+        totalMinutes: toNum(row[idx['合計作業時間']]),
+        overMinutes: toNum(row[idx['超過時間']]),
+        amount: toNum(row[idx['請求金額']]),
+        flag: row[idx['請求データ作成FLG']] || '',
+        createdAt: row[idx['請求データ作成日']] || '',
+        createdBy: row[idx['請求データ作成者']] || '',
+        internalNote: row[idx['備考（社内）']] || '',
+      });
+    }
+    return out;
+  } catch(e) {
+    if (String(e && e.message || '').indexOf('Summaryシートのヘッダ不足') >= 0) throw e;
+    logC_('WARN','loadTimeChargeSummaryRows_ failed',{ msg:e.message, stack:e.stack });
+    return [];
+  }
+}
