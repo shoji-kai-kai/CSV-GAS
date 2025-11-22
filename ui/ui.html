@@ -1,0 +1,650 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>アンビシャス 請求ツール</title>
+  <style>
+    :root {
+      --brand: #7b1e3f;
+      --brand-strong: #5d142e;
+      --brand-light: rgba(123,30,63,0.08);
+      --ok: #0284c7;
+      --err: #b91c1c;
+      --fg: #111;
+      --muted: #6b7280;
+      --bd: #e5e7eb;
+      --bg: #f8f5f7;
+      --panel-bg: #ffffff;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;
+      color: var(--fg);
+      background: var(--bg);
+    }
+
+    .container { max-width: 1220px; margin: 0 auto; }
+    .titlebar { display:flex; align-items:center; justify-content:space-between; margin-bottom: 24px; }
+    .app-title { font-size: 22px; font-weight: 800; letter-spacing: .03em; color: var(--brand-strong); }
+    .badge { font-size: 12px; color: #fff; background: var(--brand); padding: 6px 12px; border-radius: 999px; letter-spacing: .08em; }
+
+    .tabs { display:flex; gap: 12px; margin-bottom: 24px; }
+    .tab-button {
+      flex: 1 1 0;
+      padding: 14px 16px;
+      border-radius: 16px;
+      border: 1px solid transparent;
+      font-weight: 700;
+      font-size: 15px;
+      background: rgba(255,255,255,0.7);
+      color: var(--muted);
+      cursor: pointer;
+      transition: all .2s ease;
+      box-shadow: 0 4px 12px rgba(91,20,45,0.08);
+    }
+    .tab-button:hover { border-color: rgba(123,30,63,0.25); }
+    .tab-button.active {
+      background: var(--brand);
+      color: #fff;
+      border-color: var(--brand-strong);
+      box-shadow: 0 10px 24px rgba(91,20,45,0.22);
+    }
+
+    .tab-panel { display:none; gap: 20px; }
+    .tab-panel.active { display:flex; flex-direction:column; }
+
+    .card {
+      background: var(--panel-bg);
+      border: 1px solid rgba(123,30,63,0.08);
+      border-radius: 16px;
+      box-shadow: 0 18px 40px rgba(91,20,45,0.08);
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+
+    .card-header {
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    .title {
+      font: 700 18px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;
+      color: var(--brand-strong);
+      margin: 0;
+    }
+    .description { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+    .field { display:flex; flex-direction:column; gap:8px; }
+    .field label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+
+    input[type="date"],
+    input[type="month"],
+    input[type="number"],
+    input[type="text"] {
+      padding: 14px 16px;
+      border: 1px solid var(--bd);
+      border-radius: 14px;
+      background: #fff;
+      min-width: 180px;
+      font-size: 15px;
+      outline: none;
+      transition: border-color .2s ease, box-shadow .2s ease;
+      box-shadow: inset 0 1px 3px rgba(17,24,39,0.04);
+    }
+    input:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 4px rgba(123,30,63,0.14);
+    }
+
+    .actions {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .actions-left,
+    .actions-right { display:flex; gap: 12px; flex-wrap: wrap; }
+
+    button {
+      padding: 14px 22px;
+      border: none;
+      border-radius: 20px;
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 14px;
+      letter-spacing: .02em;
+      transition: transform .18s ease, box-shadow .18s ease, opacity .2s ease;
+      box-shadow: 0 6px 18px rgba(91,20,45,0.16);
+      background: var(--brand);
+      color: #fff;
+    }
+    button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(91,20,45,0.22); }
+    button:disabled { opacity: .55; cursor: not-allowed; transform: none; box-shadow: none; }
+    button.secondary { background: var(--brand-strong); }
+    button.ghost {
+      background: #fff;
+      color: var(--brand-strong);
+      border: 1px solid rgba(123,30,63,0.25);
+      box-shadow: 0 4px 12px rgba(91,20,45,0.08);
+    }
+
+    .month-field { flex: 1 1 280px; }
+    .month-picker {
+      display:flex;
+      align-items:center;
+      gap: 12px;
+      background: rgba(255,255,255,0.9);
+      border: 1px solid var(--bd);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: inset 0 0 0 1px rgba(123,30,63,0.05);
+    }
+    .month-btn {
+      width: 52px;
+      height: 52px;
+      border-radius: 16px;
+      font-size: 20px;
+      line-height: 1;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background: var(--brand);
+      color:#fff;
+    }
+    .month-btn:hover { transform: translateY(-1px); }
+    .month-core { display:flex; flex-direction:column; align-items:center; gap: 6px; flex: 1; }
+    .month-display {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--brand-strong);
+      letter-spacing: .04em;
+    }
+    .month-hint { font-size: 12px; color: var(--muted); }
+    .month-core input[type="month"] {
+      width: 0;
+      height: 0;
+      border: none;
+      padding: 0;
+      margin: 0;
+      opacity: 0;
+      position: absolute;
+      pointer-events: none;
+    }
+
+    .status { font-size: 12px; color: var(--ok); margin-top: 10px; }
+    .error { font-size: 12px; color: var(--err); white-space: pre-wrap; margin-top: 8px; }
+    .muted { font-size: 12px; color: var(--muted); }
+
+    .table-card { margin-top: 8px; }
+    .tableWrap {
+      position: relative;
+      max-height: 460px;
+      overflow: auto;
+      border-radius: 16px;
+      border: 1px solid rgba(123,30,63,0.12);
+      background: #fff;
+      box-shadow: inset 0 0 0 1px rgba(123,30,63,0.04);
+    }
+    .tableWrap::after {
+      content: '';
+      position: sticky;
+      right: 0;
+      bottom: 0;
+      width: 40px;
+      height: 100%;
+      pointer-events: none;
+      background: linear-gradient(90deg, rgba(255,255,255,0), rgba(123,30,63,0.08));
+    }
+
+    table { border-collapse: collapse; min-width: 100%; }
+    thead th {
+      position: sticky;
+      top: 0;
+      background: var(--brand);
+      color: #fff;
+      font-size: 12px;
+      letter-spacing: .03em;
+      text-align: left;
+      padding: 10px 14px;
+      z-index: 2;
+      white-space: nowrap;
+    }
+    tbody td {
+      font-size: 12px;
+      padding: 9px 14px;
+      border-bottom: 1px solid rgba(123,30,63,0.08);
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      max-width: 360px;
+    }
+    tbody tr:hover { background: rgba(123,30,63,0.05); }
+
+    .row-index-cell {
+      background: rgba(123,30,63,0.12);
+      color: var(--brand-strong);
+      font-weight: 700;
+      text-align: center;
+      width: 60px;
+      position: sticky;
+      left: 0;
+      z-index: 3;
+    }
+    tbody td.row-index-cell { background: rgba(123,30,63,0.04); }
+
+    .toast {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      background: var(--brand-strong);
+      color: #fff;
+      padding: 12px 16px;
+      border-radius: 14px;
+      font-size: 13px;
+      box-shadow: 0 10px 28px rgba(91,20,45,0.28);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all .2s;
+      z-index: 10;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    .spinner {
+      display:inline-block;
+      width:16px;
+      height:16px;
+      border:2px solid rgba(123,30,63,0.2);
+      border-top-color: var(--brand);
+      border-radius:50%;
+      animation: spin .8s linear infinite;
+      vertical-align: -2px;
+      margin-right: 6px;
+    }
+
+    .history-card { overflow: hidden; }
+    .history-toggle {
+      width: 100%;
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+    }
+    .history-toggle-inner {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+    }
+    .history-toggle-inner .title { margin-bottom: 0; }
+    .chevron { font-size: 16px; color: var(--brand-strong); transition: transform .2s ease; }
+    .history-card.collapsed .chevron { transform: rotate(-90deg); }
+    .history-body {
+      overflow: hidden;
+      max-height: 0;
+      transition: max-height .28s ease;
+    }
+    .history-card.open .history-body { max-height: 320px; }
+    .history-body ul { margin: 0; padding: 12px 0 0 20px; font-size: 12px; color: var(--fg); }
+    .history-body li + li { margin-top: 6px; }
+
+    @keyframes spin { to { transform: rotate(360deg);} }
+
+    @media (max-width: 768px) {
+      body { padding: 16px; }
+      .tabs { flex-direction: column; }
+      .tab-button { width: 100%; }
+      .card { padding: 20px; }
+      .actions { flex-direction: column; align-items: stretch; }
+      .actions-left, .actions-right { justify-content: stretch; }
+      .actions-right { justify-content: flex-end; }
+      .month-picker { flex-direction: column; align-items: stretch; }
+      .month-btn { width: 100%; }
+      .month-core { width: 100%; }
+      .tableWrap { max-height: 360px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="titlebar">
+      <div class="app-title">アンビシャス 請求ツール</div>
+      <div class="badge">Ambitious</div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-button active" data-target="panel-invoice">請求書CSV</button>
+      <button class="tab-button" data-target="panel-timecharge">作業報告書CSV</button>
+    </div>
+
+    <div class="tab-panel active" id="panel-invoice">
+      <div class="card" id="custCard">
+        <div class="card-header">
+          <div>
+            <h2 class="title">請求書CSV（得意先マスタ）</h2>
+            <p class="description">請求締日を指定し、得意先マスタの情報から MakeLeaps 形式の CSV を出力します。</p>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="field">
+            <label>請求締日</label>
+            <input id="closingDateCust" type="date">
+          </div>
+          <div class="actions-left">
+            <button id="btnPreviewCust">プレビュー</button>
+            <button id="btnCsvCust" class="secondary">CSV作成</button>
+          </div>
+          <div class="actions-right">
+            <button id="btnPingCust" class="ghost">ヘルスチェック</button>
+          </div>
+        </div>
+        <div id="statusCust" class="status"></div>
+        <div id="errorCust" class="error"></div>
+        <div class="muted" style="margin-top:10px;">
+          ルール：請求月区分と取引開始/終了日をもとに抽出し、支払期限は発行月末として出力します。
+        </div>
+      </div>
+      <div class="card table-card">
+        <h3 class="title">プレビュー（請求書CSV / 上位100件）</h3>
+        <div id="tableWrapCust" class="tableWrap"></div>
+        <div id="countCust" class="muted" style="margin-top:10px;"></div>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="panel-timecharge">
+      <div class="card" id="tcCard">
+        <div class="card-header">
+          <div>
+            <h2 class="title">作業報告書CSV（タイムチャージ）</h2>
+            <p class="description">請求対象年月と FLG 状況からタイムチャージ作業報告書を絞り込みます。</p>
+          </div>
+        </div>
+        <div class="actions">
+          <div class="field month-field">
+            <label>請求対象年月</label>
+            <div class="month-picker">
+              <button id="btnYmPrev" type="button" class="month-btn" aria-label="前月">＜</button>
+              <div class="month-core">
+                <div id="billingYmDisplay" class="month-display">選択してください</div>
+                <input id="billingYmTC" type="month">
+                <div class="month-hint">YYYY-MM</div>
+              </div>
+              <button id="btnYmNext" type="button" class="month-btn" aria-label="次月">＞</button>
+            </div>
+          </div>
+          <div class="actions-left">
+            <button id="btnPreviewTC">プレビュー</button>
+            <button id="btnCsvTC" class="secondary">CSV作成</button>
+          </div>
+          <div class="actions-right">
+            <button id="btnPingTC" class="ghost">ヘルスチェック</button>
+          </div>
+        </div>
+        <div id="statusTC" class="status"></div>
+        <div id="errorTC" class="error"></div>
+        <div class="muted" style="margin-top:10px;">請求対象年月と一致する発生日 &amp; FLG 未入力のみを抽出します。</div>
+      </div>
+      <div class="card table-card">
+        <h3 class="title">プレビュー（タイムチャージCSV / 上位100件）</h3>
+        <div id="tableWrapTC" class="tableWrap"></div>
+        <div id="countTC" class="muted" style="margin-top:10px;"></div>
+      </div>
+    </div>
+
+    <div class="card history-card collapsed" id="historyCard">
+      <button type="button" class="history-toggle" id="historyToggle">
+        <div class="history-toggle-inner">
+          <h3 class="title">実行履歴</h3>
+          <span class="chevron">▼</span>
+        </div>
+      </button>
+      <div class="history-body" id="historyBody">
+        <ul id="historyList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    (function(){
+      const $ = (id)=>document.getElementById(id);
+      const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
+      const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
+
+      function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
+      function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 2400); }
+      function gsRunExists(targetErr){
+        if (typeof google === 'undefined' || !google.script || !google.script.run) {
+          if (targetErr) targetErr.textContent = 'クライアントから Apps Script 実行ができません（google.script.run が未定義）。\n'
+            + '→ Webアプリとしてデプロイ済みか、正しいURLで開いているか、権限が許可されているかをご確認ください。';
+          return false;
+        }
+        return true;
+      }
+      function setBusy(ids, statusEl, busy){
+        ids.forEach(id=>{ const el=$(id); if(el){ el.disabled = busy; } });
+        if (statusEl) statusEl.innerHTML = busy ? '<span class="spinner"></span>処理中…' : '';
+      }
+      function watchdog(statusEl, errorEl, ms=25000){
+        statusEl.innerHTML = '<span class="spinner"></span>処理中…';
+        const token = setTimeout(()=>{
+          statusEl.innerHTML='';
+          if (errorEl) errorEl.textContent='処理が長引いています…（ネットや権限、デプロイ設定を確認してください）';
+        }, ms);
+        return ()=>clearTimeout(token);
+      }
+      function drawTable(twoD, wrapEl, countEl){
+        wrapEl.innerHTML=''; if (countEl) countEl.textContent='';
+        if (!twoD || !twoD.length) return;
+        const [header,...rows]=twoD;
+        const max=Math.min(rows.length,100);
+        let html='<table><thead><tr><th class="row-index-cell">#</th>';
+        header.forEach(h=> html+=`<th>${escapeHtml(h)}</th>`);
+        html+='</tr></thead><tbody>';
+        for (let i=0;i<max;i++){
+          html+='<tr>';
+          html+=`<td class="row-index-cell">${i+1}</td>`;
+          rows[i].forEach(c=>{ const v=c==null?'':String(c); html+=`<td title="${escapeHtml(v)}">${escapeHtml(v)}</td>`; });
+          html+='</tr>';
+        }
+        html+='</tbody></table>';
+        wrapEl.innerHTML=html;
+        if (countEl) countEl.textContent = `表示 ${max} / 合計 ${rows.length}`;
+      }
+      function appendHistory(html){
+        const card=$('historyCard'); const body=$('historyBody'); const ul=$('historyList');
+        if (card.classList.contains('collapsed')){ card.classList.add('open'); }
+        card.classList.remove('collapsed');
+        const li=document.createElement('li'); li.innerHTML=html; ul.prepend(li);
+      }
+      function updateMonthDisplay(){ // ★修正: 月ピッカー表示を同期
+        const input=$('billingYmTC');
+        const display=$('billingYmDisplay');
+        if (!input || !display) return;
+        if (!input.value){ display.textContent='選択してください'; return; }
+        const [y,m]=input.value.split('-');
+        if (y && m){ display.textContent=`${Number(y)}年${Number(m)}月`; }
+      }
+      function adjustMonth(delta){ // ★修正: 前月/次月ボタン制御
+        const input=$('billingYmTC');
+        if (!input) return;
+        const base = input.value ? new Date(input.value + '-01T00:00:00') : new Date();
+        base.setDate(1);
+        base.setMonth(base.getMonth() + delta);
+        const y = base.getFullYear();
+        const m = String(base.getMonth()+1).padStart(2,'0');
+        input.value = `${y}-${m}`;
+        updateMonthDisplay();
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      function setActiveTab(targetId){
+        tabButtons.forEach(btn=>{
+          const active = btn.dataset.target === targetId;
+          btn.classList.toggle('active', active);
+        });
+        tabPanels.forEach(panel=> panel.classList.toggle('active', panel.id === targetId));
+      }
+
+      window.addEventListener('DOMContentLoaded', function(){
+        tabButtons.forEach(btn=>{
+          btn.addEventListener('click', ()=> setActiveTab(btn.dataset.target));
+        });
+
+        const historyToggle=$('historyToggle');
+        const historyCard=$('historyCard');
+        if (historyToggle && historyCard){
+          historyToggle.addEventListener('click', ()=>{
+            const isOpen=historyCard.classList.toggle('open');
+            historyCard.classList.toggle('collapsed', !isOpen);
+          });
+        }
+
+        const billingYmInput=$('billingYmTC');
+        if (billingYmInput){
+          billingYmInput.addEventListener('change', updateMonthDisplay);
+          billingYmInput.addEventListener('input', updateMonthDisplay);
+        }
+        $('btnYmPrev').addEventListener('click', ()=> adjustMonth(-1));
+        $('btnYmNext').addEventListener('click', ()=> adjustMonth(1));
+
+        /* ===== 請求書（得意先マスタ） ===== */
+        $('btnPingCust').addEventListener('click', ()=>{
+          const err=$('errorCust'), st=$('statusCust'); err.textContent='';
+          if (!gsRunExists(err)) return;
+          setBusy(['btnPreviewCust','btnCsvCust','btnPingCust','closingDateCust'], st, true);
+          const clear = watchdog(st, err, 15000);
+          google.script.run
+            .withSuccessHandler(res=>{ clear(); setBusy(['btnPreviewCust','btnCsvCust','btnPingCust','closingDateCust'], st, false);
+              if (!res || (res.ok===false && !res.message)){ st.textContent = 'ヘルスチェック応答なし'; return; }
+              st.textContent = (res.message || 'OK');
+              toast('請求書ヘルスチェックOK');
+              appendHistory(`【請求書】Ping`);
+            })
+            .withFailureHandler(e=>{ clear(); setBusy(['btnPreviewCust','btnCsvCust','btnPingCust','closingDateCust'], st, false);
+              err.textContent='ヘルスチェック失敗: ' + (e?.message||'');
+            })
+            .healthcheck();
+        });
+
+        $('btnPreviewCust').addEventListener('click', ()=>{
+          const err=$('errorCust'), st=$('statusCust'); err.textContent='';
+          const closing=$('closingDateCust').value;
+          if (!closing){ err.textContent='請求締日を入力してください'; return; }
+          if (!gsRunExists(err)) return;
+          setBusy(['btnPreviewCust','btnCsvCust','btnPingCust','closingDateCust'], st, true);
+          const clear = watchdog(st, err);
+          google.script.run
+            .withSuccessHandler(res=>{ clear(); setBusy(['btnPreviewCust','btnCsvCust','btnPingCust','closingDateCust'], st, false);
+              if (!res || !res.ok){ err.textContent = res?.message || 'プレビュー失敗'; drawTable([], $('tableWrapCust'), $('countCust')); return; }
+              drawTable(res.preview||[], $('tableWrapCust'), $('countCust'));
+              st.textContent = res.message || 'プレビュー完了';
+              toast('請求書プレビュー完了');
+              if (res.generatedAt){ appendHistory(`【${escapeHtml(res.generatedAt)}】請求書プレビュー: ${escapeHtml(String(res.rows||0))}件`); }
+            })
+            .withFailureHandler(e=>{ clear(); setBusy(['btnPreviewCust','btnCsvCust','btnPingCust','closingDateCust'], st, false);
+              err.textContent='プレビュー失敗: ' + (e?.message||'');
+            })
+            .preview_CustomersByClosing({ closingDate: closing.replace(/-/g,'/') });
+        });
+
+        $('btnCsvCust').addEventListener('click', ()=>{
+          const err=$('errorCust'), st=$('statusCust'); err.textContent='';
+          const closing=$('closingDateCust').value;
+          if (!closing){ err.textContent='請求締日を入力してください'; return; }
+          if (!gsRunExists(err)) return;
+          setBusy(['btnPreviewCust','btnCsvCust','btnPingCust','closingDateCust'], st, true);
+          const clear = watchdog(st, err, 30000);
+          google.script.run
+            .withSuccessHandler(res=>{ clear(); setBusy(['btnPreviewCust','btnCsvCust','btnPingCust','closingDateCust'], st, false);
+              if (!res || !res.ok){ err.textContent = res?.message || 'CSV作成に失敗'; return; }
+              st.innerHTML = (res.message || 'CSV保存完了') + (res.url ? ` / <a href="${res.url}" target="_blank">CSV</a>` : '');
+              toast('請求書CSV作成完了');
+              const stamp = res.completedAt ? `【${escapeHtml(res.completedAt)}】` : '';
+              const file  = res.filename ? escapeHtml(res.filename) : '(no name)';
+              const cnt   = escapeHtml(String(res.rows||0));
+              appendHistory(`${stamp} 請求書CSV作成: ${file}（${cnt}件）` + (res.url? ` / <a href="${res.url}" target="_blank">CSV</a>`:''));
+            })
+            .withFailureHandler(e=>{ clear(); setBusy(['btnPreviewCust','btnCsvCust','btnPingCust','closingDateCust'], st, false);
+              err.textContent='CSV作成失敗: ' + (e?.message||'');
+            })
+            .createCsv_CustomersByClosing({ closingDate: closing.replace(/-/g,'/') });
+        });
+
+        /* ===== タイムチャージ ===== */
+        $('btnPingTC').addEventListener('click', ()=>{
+          const err=$('errorTC'), st=$('statusTC'); err.textContent='';
+          if (!gsRunExists(err)) return;
+          setBusy(['btnPreviewTC','btnCsvTC','btnPingTC','billingYmTC','btnYmPrev','btnYmNext'], st, true);
+          const clear=watchdog(st, err, 15000);
+          google.script.run
+            .withSuccessHandler(res=>{ clear(); setBusy(['btnPreviewTC','btnCsvTC','btnPingTC','billingYmTC','btnYmPrev','btnYmNext'], st, false);
+              if (!res || !res.ok){ err.textContent='ヘルスチェック失敗'; return; }
+              st.textContent = `OK ${res.lastRow}行 x ${res.lastCol}列 / ${res.at} / ${res.ms}ms`;
+              toast('タイムチャージ ヘルスチェックOK');
+              appendHistory(`【${escapeHtml(res.at||'') }】TC Ping: ${escapeHtml(String(res.lastRow||0))}行`);
+            })
+            .withFailureHandler(e=>{ clear(); setBusy(['btnPreviewTC','btnCsvTC','btnPingTC','billingYmTC','btnYmPrev','btnYmNext'], st, false);
+              err.textContent='ヘルスチェック失敗: ' + (e?.message||'');
+            })
+            .ping_TimeCharge();
+        });
+
+        $('btnPreviewTC').addEventListener('click', ()=>{
+          const err=$('errorTC'), st=$('statusTC'); err.textContent='';
+          const ym=$('billingYmTC').value;
+          if (!ym){ err.textContent='請求対象年月を入力してください'; return; }
+          if (!gsRunExists(err)) return;
+
+          setBusy(['btnPreviewTC','btnCsvTC','btnPingTC','billingYmTC','btnYmPrev','btnYmNext'], st, true);
+          const clear=watchdog(st, err);
+          google.script.run
+            .withSuccessHandler(res=>{ clear(); setBusy(['btnPreviewTC','btnCsvTC','btnPingTC','billingYmTC','btnYmPrev','btnYmNext'], st, false);
+              if (!res || !res.ok){ err.textContent = res?.message || 'プレビュー失敗'; drawTable([], $('tableWrapTC'), $('countTC')); return; }
+              drawTable(res.preview||[], $('tableWrapTC'), $('countTC'));
+              st.textContent = res.message || 'プレビュー完了';
+              toast('タイムチャージ プレビュー完了');
+              if (res.generatedAt){ appendHistory(`【${escapeHtml(res.generatedAt)}】TCプレビュー: ${escapeHtml(String(res.rows||0))}件`); }
+            })
+            .withFailureHandler(e=>{ clear(); setBusy(['btnPreviewTC','btnCsvTC','btnPingTC','billingYmTC','btnYmPrev','btnYmNext'], st, false);
+              err.textContent='プレビュー失敗: ' + (e?.message||'');
+            })
+            .preview_TimeCharge({ billingYm: ym });
+        });
+
+        $('btnCsvTC').addEventListener('click', ()=>{
+          const err=$('errorTC'), st=$('statusTC'); err.textContent='';
+          const ym=$('billingYmTC').value;
+          if (!ym){ err.textContent='請求対象年月を入力してください'; return; }
+          if (!gsRunExists(err)) return;
+
+          setBusy(['btnPreviewTC','btnCsvTC','btnPingTC','billingYmTC','btnYmPrev','btnYmNext'], st, true);
+          const clear=watchdog(st, err, 30000);
+          google.script.run
+            .withSuccessHandler(res=>{ clear(); setBusy(['btnPreviewTC','btnCsvTC','btnPingTC','billingYmTC','btnYmPrev','btnYmNext'], st, false);
+              if (!res || !res.ok){ err.textContent = res?.message || 'CSV作成に失敗'; return; }
+              st.innerHTML = (res.message || 'CSV保存完了') + (res.url? ` / <a href="${res.url}" target="_blank">CSV</a>` : '');
+              toast('タイムチャージ CSV作成完了');
+              const stamp = res.completedAt ? `【${escapeHtml(res.completedAt)}】` : '';
+              const file  = res.filename ? escapeHtml(res.filename) : '(no name)';
+              const cnt   = escapeHtml(String(res.rows||0));
+              appendHistory(`${stamp} TC CSV作成: ${file}（${cnt}件）` + (res.url? ` / <a href="${res.url}" target="_blank">CSV</a>`:''));
+            })
+            .withFailureHandler(e=>{ clear(); setBusy(['btnPreviewTC','btnCsvTC','btnPingTC','billingYmTC','btnYmPrev','btnYmNext'], st, false);
+              err.textContent='CSV作成失敗: ' + (e?.message||'');
+            })
+            .createCsv_TimeCharge({ billingYm: ym });
+        });
+
+        updateMonthDisplay();
+      });
+    })();
+  </script>
+</body>
+</html>
