@@ -76,7 +76,8 @@ function rebuild_TimeChargeSummaryForMonth(billingYm) {
     const cover    = tc_toNumber_(idxOpt.カバー時間 >=0 ? row[idxOpt.カバー時間] : 0);
     const workMin  = tc_toNumber_(idxOpt.作業時間 >=0 ? row[idxOpt.作業時間] : 0);
 
-    const key = [person,billType,custCode,custName,caseCode,caseName,unit,cover].map(v=>String(v||'')).join('\u0001');
+    // ★修正: グルーピングキーから担当者を外し、ケースコード単位で集計
+    const key = [billType,custCode,custName,caseCode,caseName,unit,cover].map(v=>String(v||'')).join('\u0001');
     if (!groups.has(key)) {
       groups.set(key, { person, billType, custCode, custName, caseCode, caseName, unit, cover, work:0 });
     }
@@ -106,10 +107,10 @@ function rebuild_TimeChargeSummaryForMonth(billingYm) {
   });
 
   rows.sort((a,b)=>{
-    if (a[0] !== b[0]) return String(a[0]).localeCompare(String(b[0]), 'ja');
+    // ★修正: 得意先コード→ケースコード→担当者で整列
     if (a[2] !== b[2]) return String(a[2]).localeCompare(String(b[2]), 'ja');
     if (a[4] !== b[4]) return String(a[4]).localeCompare(String(b[4]), 'ja');
-    return String(a[3]).localeCompare(String(b[3]), 'ja');
+    return String(a[0]).localeCompare(String(b[0]), 'ja');
   });
 
   const filename = 'TimeCharge_Summary_' + tc_fmtYearMonth_(ym.year, ym.month).replace('/', '-');
